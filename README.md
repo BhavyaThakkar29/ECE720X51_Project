@@ -137,18 +137,6 @@ Run all tests with: `pytest tests/`
 ### `results/`
 Empty at the start. After running `main.py`, evaluation outputs are saved here automatically — one JSON file with per-sample scores and one summary JSON with aggregate metrics per dataset.
 
----
-
-## Benchmark Datasets
-
-| Granularity | Dataset | Task |
-|---|---|---|
-| Word | WordSim-353, SimLex-999 | Lexical similarity |
-| Sentence | STS-B, SNLI, HaluEval QA | Sentence faithfulness |
-| Document | HaluEval Summarization, CNN/DM | Full-text grounding |
-
----
-
 ## Configuration Reference
 
 ```yaml
