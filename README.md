@@ -162,3 +162,215 @@ models:
   sentence: "all-MiniLM-L6-v2"
   document: "all-mpnet-base-v2"
 ```
+
+## Datasets
+
+All 6 datasets are streamed directly from HuggingFace — nothing is downloaded locally. They are all called from `src/evaluation/dataset_loader.py`. Each dataset has its own function in that file. Below is a description of each dataset, which similarity level it is used for, and exactly how to call it.
+
+Install the library first if you have not already:
+
+```bash
+pip install datasets
+```
+
+---
+
+### Word-level Datasets
+
+These are used to evaluate **S_word** — token-level cosine similarity between individual word embeddings.
+
+#### SimpleQA
+A short-form factual QA dataset released by OpenAI with 4,326 questions covering geography, history, science, and pop culture. Answers are single, unambiguous correct answers — typically just a few words long. This makes it ideal for word-level similarity since the answers are short and precise, so the embedder must capture exact lexical meaning rather than relying on sentence context.
+
+HuggingFace page: https://huggingface.co/datasets/basicv8vc/SimpleQA
+
+How it is called in `dataset_loader.py`:
+```python
+from datasets import load_dataset
+
+def load_simpleqa(n=500):
+    ds = load_dataset("basicv8vc/SimpleQA", split="test", streaming=True)
+    records = []
+    for row in ds.take(n):
+        ref = row["answer"]
+        records.append({"generated": ref, "reference": ref, "label": 0})
+    return records
+```
+
+How to use it in `main.py`:
+```python
+from src.evaluation.dataset_loader import load_simpleqa
+
+records = load_simpleqa(n=500)
+result = evaluator.run(records, dataset_name="simpleqa")
+```
+
+---
+
+#### BioASQ
+A biomedical question answering dataset sourced from PubMed literature. Answers are short medical terms, gene names, drug names, or brief factual phrases. The highly specialised vocabulary makes it a strong stress test for word-level embeddings — the embedder has to capture domain-specific semantic meaning and cannot rely on common word overlap. Requires accepting dataset terms on HuggingFace before streaming will work — visit https://huggingface.co/datasets/bigbio/bioasq_task_b and click Agree while logged in.
+
+HuggingFace page: https://huggingface.co/datasets/bigbio/bioasq_task_b
+
+How it is called in `dataset_loader.py`:
+```python
+from datasets import load_dataset
+
+def load_bioasq(n=500):
+    ds = load_dataset(
+        "bigbio/bioasq_task_b",
+        name="bioasq_task_b_source",
+        split="train",
+        streaming=True,
+        trust_remote_code=True
+    )
+    records = []
+    for row in ds.take(n):
+        if not row.get("ideal_answer"):
+            continue
+        ref = row["ideal_answer"][0] if isinstance(row["ideal_answer"], list) else row["ideal_answer"]
+        records.append({"generated": ref, "reference": ref, "label": 0})
+    return records
+```
+
+How to use it in `main.py`:
+```python
+from src.evaluation.dataset_loader import load_bioasq
+
+records = load_bioasq(n=500)
+result = evaluator.run(records, dataset_name="bioasq")
+```
+
+---
+
+### Sentence-level Datasets
+
+These are used to evaluate **S_sent** — cosine similarity computed between sentence-level embeddings.
+
+#### TriviaQA
+A large-scale reading comprehension and QA dataset with over 650,000 question-answer-evidence triples. Questions are trivia-style and answers are typically one to two full sentences pulled from Wikipedia or web documents. Useful for sentence-level evaluation because answers are full sentences rather than single words, which tests whether the sentence embedder captures meaning at the clause level.
+
+HuggingFace page: https://huggingface.co/datasets/mandarjoshi/trivia_qa
+
+How it is called in `dataset_loader.py`:
+```python
+from datasets import load_dataset
+
+def load_triviaqa(n=500):
+    ds = load_dataset("mandarjoshi/trivia_qa", "rc", split="validation", streaming=True)
+    records = []
+    for row in ds.take(n):
+        ref = row["answer"]["value"]
+        records.append({"generated": ref, "reference": ref, "label": 0})
+    return records
+```
+
+How to use it in `main.py`:
+```python
+from src.evaluation.dataset_loader import load_triviaqa
+
+records = load_triviaqa(n=500)
+result = evaluator.run(records, dataset_name="triviaqa")
+```
+
+---
+
+#### SummEval
+A summarization evaluation dataset containing machine-generated summaries from 16 different summarization models, each rated by human annotators across four dimensions: consistency, coherence, fluency, and relevance. The consistency scores directly map to faithfulness, making it ideal for validating S_sent — you can check whether your sentence-level cosine similarity correlates with the human consistency ratings rather than just running a binary label.
+
+HuggingFace page: https://huggingface.co/datasets/mteb/summeval
+
+How it is called in `dataset_loader.py`:
+```python
+from datasets import load_dataset
+
+def load_summeval(n=500):
+    ds = load_dataset("mteb/summeval", split="test", streaming=True)
+    records = []
+    for row in ds.take(n):
+        machine_summary = row["machine_summaries"][0] if row.get("machine_summaries") else ""
+        human_summary   = row["human_summaries"][0]   if row.get("human_summaries")  else ""
+        consistency     = row["human_scores"]["consistency"]
+        avg             = sum(consistency) / len(consistency) if consistency else 3
+        label           = 0 if avg >= 3 else 1
+        records.append({"generated": machine_summary, "reference": human_summary, "label": label})
+    return records
+```
+
+How to use it in `main.py`:
+```python
+from src.evaluation.dataset_loader import load_summeval
+
+records = load_summeval(n=500)
+result = evaluator.run(records, dataset_name="summeval")
+```
+
+---
+
+### Document-level Datasets
+
+These are used to evaluate **S_doc** — cosine similarity computed between single full-document embeddings.
+
+#### TruthfulQA
+A benchmark of 817 questions designed to test whether language models produce truthful answers. Questions span health, law, finance, and common misconceptions — areas where models frequently hallucinate plausible-sounding but false information. Each question includes a correct best answer and a set of incorrect answers, giving you ready-made faithful and hallucinated pairs for document-level evaluation. Small dataset but high quality labels.
+
+HuggingFace page: https://huggingface.co/datasets/truthfulqa/truthful_qa
+
+How it is called in `dataset_loader.py`:
+```python
+from datasets import load_dataset
+
+def load_truthfulqa(n=500):
+    ds = load_dataset("truthfulqa/truthful_qa", "generation", split="validation", streaming=True)
+    records = []
+    for row in ds.take(n):
+        correct   = row["best_answer"]
+        incorrect = row["incorrect_answers"][0] if row["incorrect_answers"] else ""
+        records.append({"generated": correct,   "reference": correct, "label": 0})
+        records.append({"generated": incorrect, "reference": correct, "label": 1})
+    return records
+```
+
+How to use it in `main.py`:
+```python
+from src.evaluation.dataset_loader import load_truthfulqa
+
+records = load_truthfulqa(n=500)
+result = evaluator.run(records, dataset_name="truthfulqa")
+```
+
+---
+
+#### QASPER
+A dataset of 5,049 questions over 1,585 NLP research papers where answers are extracted from or abstractively generated from the full paper text. Because the reference is an entire research paper, this is the most demanding test for document-level cosine similarity — the embedder must capture faithfulness across long, dense technical documents rather than short paragraphs. Also directly relevant to the project since the domain is NLP research.
+
+HuggingFace page: https://huggingface.co/datasets/allenai/qasper
+
+How it is called in `dataset_loader.py`:
+```python
+from datasets import load_dataset
+
+def load_qasper(n=500):
+    ds = load_dataset("allenai/qasper", split="validation", streaming=True)
+    records = []
+    for row in ds.take(n):
+        for answers in row.get("qas", {}).get("answers", []):
+            for ans in answers.get("answer", []):
+                free_form = ans.get("free_form_answer", "")
+                if not free_form:
+                    continue
+                records.append({"generated": free_form, "reference": free_form, "label": 0})
+                if len(records) >= n:
+                    return records
+    return records
+```
+
+How to use it in `main.py`:
+```python
+from src.evaluation.dataset_loader import load_qasper
+
+records = load_qasper(n=500)
+result = evaluator.run(records, dataset_name="qasper")
+```
+
+---
